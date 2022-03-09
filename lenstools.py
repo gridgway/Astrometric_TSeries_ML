@@ -807,6 +807,8 @@ class Observer(Point):
 
             if self.units:
                 angle_unit = u.mas
+            else:
+                angle_unit = 1
 
             # Initial observation
             theta_phi0 = self.observe(source, lens, method)
@@ -836,7 +838,8 @@ class Observer(Point):
                 source.time_evolve(-dt * N)
                 if lens is not None:
                     lens.time_evolve(-dt * N)
-            if self.units:
+
+            if type(source) is Source:
                 return np.array(data) * angle_unit
             else:
-                return np.array(data)
+                return np.swapaxes(data, 0, 1) * angle_unit
