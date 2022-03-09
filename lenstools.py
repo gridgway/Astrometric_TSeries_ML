@@ -1,6 +1,6 @@
 """ Tools that are useful for lensing calculations
 
-We choose km, s and M_sol as our system of units.
+We choose kpc, yr and M_sol as our system of units.
 
 
 """
@@ -18,37 +18,46 @@ from astropy import constants as const
 
 # Convenient variables
 pi = np.pi
-norm = np.linalg.norm
+# norm = np.linalg.norm
 mult = np.matmul
 dot = np.dot
 
+
+def norm(vec):
+    return np.sqrt(sum(vec*vec))
+
+
+def multinorm(vecs):
+    return np.sqrt(np.sum(vecs**2, axis=1))
 
 #####################################
 # Conversion Factors                #
 #####################################
 
-AU = u.AU.to(u.km)
-"""Astronomical Unit in km"""
+AU = u.AU.to(u.kpc)
+"""Astronomical Unit in kpc"""
 
 mu_as = 2*pi/360/60**2 / 1e6
 """Numerical value of micro arc-seconds in radians"""
+
+rad_to_muas = u.rad.to(u.mas) * 1e3
 
 #####################################
 # Constants                         #
 #####################################
 
-c = const.c.to(u.km/u.s)
-"""Speed of light in km s\ :sup:`-1`\ ."""
+c = const.c.to(u.kpc/u.yr).value
+"""Speed of light in kpc yr\ :sup:`-1`\ ."""
 
-G_N = const.G.to(u.km**3 / u.M_sun / u.s**2)
+G_N = const.G.to(u.kpc**3 / u.M_sun / u.yr**2).value
 """Newton's Gravitational Constant in
-    km\ :sup:`3` M_\odot\ :sup:`-1` s\ :sup:`-2`\ ."""
+    kpc\ :sup:`3` M_\odot\ :sup:`-1` yr\ :sup:`-2`\ ."""
 
-v_esc = 550 * u.km/u.s
-"""Milky Way escape velocity in km s\ :sup:`-1`\ ."""
+v_esc = (550 * u.km/u.s).to(u.kpc/u.yr).value
+"""Milky Way escape velocity in kpc yr\ :sup:`-1`\ ."""
 
-R_mw = (10*u.kpc).to(u.km)
-"""Size of the baryonic component of the Milky Way in km."""
+R_mw = 10
+"""Size of the baryonic component of the Milky Way in kpc."""
 
 
 #####################################
@@ -78,7 +87,8 @@ def random_perp(vec):
 
 def sample(method='normal', N=1, scale=1.0,
            inv_cdf=None,  # if method == 'custom_sphere'
-           observer=None, kind=None, M=None, R=None  # if method == 'relative'
+           observer=None, kind=None, M=None, R=None,  # if method == 'relative'
+           v_esc=v_esc
            ):
     """ Multi-purpose sampling function
 
@@ -170,7 +180,11 @@ def sample(method='normal', N=1, scale=1.0,
             return np.transpose([x[0], y[0], z[0]])
 
         else:
-            return np.transpose([x, y, z]) * x.unit
+            ans = np.transpose([x, y, z])
+            if type(scale) == u.quantity.Quantity:
+                ans *= x.unit
+
+            return ans
 
     elif method == 'relative':
         """
@@ -298,6 +312,19 @@ class Points(object):
     def __getitem__(self, ind):
         return Point(self.x[ind], self.v[ind])
 
+
+    # !!! Less copy and paste in this function
+    def append(self, point):
+        if self.x is None:
+            self.x = point.x[np.newaxis]
+        else:
+            self.x = np.append(self.x, point.x[np.newaxis], axis=0)
+
+        if self.v is None:
+            self.v = point.v[np.newaxis]
+        else:
+            self.v = np.append(self.v, point.v[np.newaxis], axis=0)
+
     def time_evolve(self, dt):
         """ evolve the position of the lenses
 
@@ -310,14 +337,7 @@ class Points(object):
                 time increment
         """
 
-        if type(dt) != u.quantity.Quantity:
-            dt = dt * u.s
-
-        if norm(self.x) == 0:
-            self.x = self.v*dt
-
-        else:
-            self.x += self.v*dt
+        self.x += self.v*dt
 
 
 #####################################
@@ -401,34 +421,72 @@ class Lens(Point):
 # Converts single inputs into lists of inputs
 def to_list(y, tmp_list):
 
-    if not type(y) in {np.ndarray, list}:
-        return np.ones_like(tmp_list) * y
+    if type(y) is list:
+        return np.array(y)
+
+    elif type(y) is np.ndarray or y is None:
+        return y
 
     else:
-        return y
+        if type(tmp_list) in {list, np.ndarray}:
+            return np.ones_like(tmp_list) * y
+
+        else:
+            return np.array([y])
 
 
 class Lenses(Points):
     """ Collection of lenses
     """
 
-    def __init__(self, x=None, v=None, M=None, kind=None, R=None):
+    def __init__(self, x=None, v=None, kind=None, M=None, R=None):
 
-        self.M = to_list(M)
-        self.kind = to_list(kind)
-        self.R = to_list(R)
+        self.kind = to_list(kind, x)
+        self.M = to_list(M, x)
+        self.R = to_list(R, x)
         super().__init__(x, v)
 
     def __setitem__(self, ind, lens):
         self.x[ind] = lens.x
         self.v[ind] = lens.v
-        self.M[ind] = lens.M
         self.kind[ind] = lens.kind
+        self.M[ind] = lens.M
         self.R[ind] = lens.R
 
     def __getitem__(self, ind):
         return Lens(self.x[ind], self.v[ind],
-                    self.M[ind], self.kind[ind], self.R[ind])
+                    self.kind[ind], self.M[ind], self.R[ind])
+
+    # !!! Less copy and paste in this function
+    def append(self, lens):
+        super().append(lens)
+
+        if self.M is None:
+            self.M = np.array([lens.M])
+        else:
+            self.M = np.append(self.M, lens.M)
+
+        if self.kind is None:
+            self.kind = np.array([lens.kind])
+        else:
+            self.kind = np.append(self.kind, lens.kind)
+
+        if self.R is None:
+            self.R = np.array([lens.R])
+        else:
+            self.R = np.append(self.R, lens.R)
+
+    def enclosed_mass(self, b, tau=None):
+        """ enclosed mass within a cylinder of radius b """
+
+        if np.all(self.kind == 'point'):
+            return self.M
+
+        elif np.all(self.kind == 'Gaussian'):
+            return self.M * (1-np.exp(-0.5 * (b/self.R)**2))
+
+        else:
+            raise TypeError("Haven't defined for tNFW or Burkert yet")
 
 
 class Source(Point):
@@ -473,25 +531,33 @@ class Observer(Point):
     """
 
     def __init__(self, x=None, v=None, parallax=False,
-                 R=1.*u.AU, phi=0*u.rad):
+                 R=AU, phi=0., units=False):
         """ Initialize an observer
 
             Default to the origin (position and velocity {0,0,0})
             If Parallax is True, include rotation around the sun.
             Work in a reference frame where the parallax happens in x-y plane
         """
+        self.units = units
 
         if parallax and (R is None):
             raise TypeError("Please provide a radius, R, for the parallax")
 
         if x is None:
-            x = np.array([0, 0, 0]) * u.km
+            x = np.array([0., 0., 0.])
+            if units:
+                x *= u.kpc
 
         if v is None:
-            v = np.array([0, 0, 0]) * u.km/u.s
+            v = np.array([0., 0., 0.])
+            if units:
+                v = u.kpc/u.yr
 
         self.parallax = parallax
         self.v = v
+        if units:
+            R *= u.kpc
+            phi *= u.rad
 
         if not parallax:
             self.x = x
@@ -527,7 +593,9 @@ class Observer(Point):
         self._x_ctr += self.v*dt
 
         if self.parallax:
-            dphi = 2*np.pi * dt/u.yr * u.rad
+            dphi = 2*np.pi * dt
+            if self.units:
+                dphi *= u.rad/u.yr
             self.phi += dphi
 
             self.x = self._x_ctr + self.R * np.array([
@@ -547,10 +615,10 @@ class Observer(Point):
             Parameters
             ----------
 
-            source : Source
-                source that is being observed
-            lens : Lens
-                object that gravitationally lenses the source light
+            source : Source or Sources
+                source(s) that is being observed
+            lens : Lens or Lenses
+                object(s) that gravitationally lenses the source light
             method : string
                 formula used to calculate deflection angle
             N : int
@@ -573,39 +641,80 @@ class Observer(Point):
             # Observe the angular position of a source without deflection
             ###
             if lens is None:
-                x, y, z = source.x
-                r = norm(source.x)
-                phi = np.arctan(y/x)
-                if x < 0:
-                    phi += pi * u.rad
-                theta = np.arccos(z/r)
 
-                return np.array([theta.value, phi.value]) * u.rad
+                if type(source) is Source:
+                    x, y, z = source.x
+                    r = norm(source.x)
+                    phi = np.arctan(y/x)
+                    if x < 0:
+                        if self.units:
+                            phi += pi * u.rad
+                        else:
+                            phi += pi
+                    theta = np.arccos(z/r)
+
+                    if self.units:
+                        return np.array([theta.value, phi.value]) * u.rad
+                    else:
+                        return np.array([theta, phi])
+
+                elif type(source) is Sources:
+
+                    x, y, z = source.x.transpose()
+                    r = multinorm(source.x)
+                    phi = np.arctan(y/x)
+                    mask = (x < 0)
+                    if self.units:
+                        phi[mask] += pi * u.rad
+                    else:
+                        phi[mask] += pi
+                    theta = np.arccos(z/r)
+
+                    if self.units:
+                        return np.transpose([theta.value, phi.value]) * u.rad
+                    else:
+                        return np.transpose([theta, phi])
+
+                else:
+                    raise TypeError('Invalid source input')
 
             ###
             # Otherwise, include the deflection due to the lens
             ###
 
-            # Distance from observer to lens
-            Dl = norm(lens.x-self.x)
+            if type(source) is Source:
+                # Distance from observer to lens
+                Dl = norm(lens.x-self.x)
 
-            # direction of line passing through the lens and observer
-            zhat = (lens.x-self.x)/Dl
+                # direction of line passing through the lens and observer
+                zhat = (lens.x-self.x)/Dl
 
-            # Distance from observer to source along z axis
-            Ds = dot(zhat, source.x)
+                # Distance from observer to source along z axis
+                Ds = dot(zhat, source.x)
 
-            # Perpendicular position, angle, and direction of source relative
-            # to z axis
-            eta = source.x - Ds * zhat
-            beta = np.arctan(norm(eta)/Ds)
-            theta_hat = eta/norm(eta)
+                # Perpendicular position, angle, and direction
+                # of source relative to z axis
+                eta = source.x - Ds * zhat
+                beta = np.arctan(norm(eta)/Ds)
+                theta_hat = eta/norm(eta)
 
-            if cross_check:
-                print((eta**2 + Ds**2)/norm(source.x)**2)
+                # Distance between source and lens along z axis
+                Dls = Ds - Dl
 
-            # Distance between source and lens along z axis
-            Dls = Ds - Dl
+                if cross_check:
+                    print(1-(norm(eta)**2 + Ds**2)/norm(source.x)**2)
+
+            elif type(source) is Sources:
+
+                Dl = multinorm(lens.x-self.x)
+                zhat = (lens.x-self.x)/Dl[:, np.newaxis]
+                Ds = np.sum(zhat * source.x, axis=1)
+                eta = source.x - Ds[:, np.newaxis] * zhat
+                beta = np.arctan(multinorm(eta)/Ds)
+                theta_hat = eta/multinorm(eta)[:, np.newaxis]
+                Dls = Ds - Dl
+                if cross_check:
+                    print(1-(multinorm(eta)**2 + Ds**2)/multinorm(source.x)**2)
 
             if method == 'fully_approximate':
                 """ Formula from 1804.01991 (Ken+)
@@ -614,22 +723,36 @@ class Observer(Point):
                     - convenient impact parameter (|b| = |eta| = |xi|)
                 """
 
+
                 # Assume the impact parameter of the source is the
                 # distance that appears in the lensing equation
-                b = eta
+                if type(source) is Source:
+                    b = norm(eta)
+                elif type(source) is Sources:
+                    b = multinorm(eta)
 
                 # Enclosed mass
                 M_enc = lens.enclosed_mass(b)
 
-                dTheta = (
-                    -(1-Dl/Ds) * 4*G_N*M_enc/c**2/norm(b)
-                ).decompose() / mu_as * 1e-3 * u.mas
-                # dTheta = -thetaE**2 * Dl/Ds / beta  / mu_as * 1e-3 * u.mas
+                if self.units:
+                    units = (u.kpc**3 / u.M_sun / u.yr**2) / (u.kpc/u.yr)**2
+                    dTheta = np.abs(
+                        -(1-Dl/Ds) * 4*G_N*M_enc/c**2/b * units
+                    ).decompose() / mu_as * 1e-3 * u.mas
+                else:
+                    dTheta = np.abs(
+                        -(1-Dl/Ds) * 4*G_N*M_enc/c**2/b
+                    )
+                # dTheta = -thetaE**2 * Dl/Ds / beta  / mu_as*1e-3*u.mas
                 # dx = - Dl/Ds / y  / mu_as * 1e-3 * u.mas
 
                 # Place a fictitious source where the source appears
-                image = Source(
-                    x=source.x + Ds * np.sin(dTheta) * theta_hat)
+                if type(source) is Source:
+                    image = Source(
+                        x=source.x + Ds * np.sin(dTheta) * theta_hat)
+                elif type(source) is Sources:
+                    image = Sources(
+                        x=source.x + (Ds * np.sin(dTheta))[:, np.newaxis] * theta_hat)
 
                 # Angles of the image
                 return self.observe(image)
@@ -644,14 +767,18 @@ class Observer(Point):
                 """
 
                 # Einstein radius
-                thetaE = (
-                    np.sqrt(4 * G_N * lens.M/c**2 * Dls/Ds/Dl)
-                ).decompose() * u.rad
+                if self.units:
+                    thetaE = (
+                        np.sqrt(4 * G_N * lens.M/c**2 * Dls/Ds/Dl)
+                    ).decompose() * u.rad
+                else:
+                    thetaE = np.sqrt(4 * G_N * lens.M/c**2 * Dls/Ds/Dl)
 
                 # Everything in units of Einstein radius
-                yhalf = (beta/thetaE/2).value
-
-                # print(yhalf)
+                if self.units:
+                    yhalf = (beta/thetaE/2).value
+                else:
+                    yhalf = beta/thetaE/2
 
                 # The two images: x-plus and x-minus
                 # x = theta/thetaE
@@ -660,7 +787,8 @@ class Observer(Point):
 
                 # Place fictitious sources at the image positions
                 image_p, image_m = [
-                    Source(x=source.x + Ds * np.sin(x * thetaE) * theta_hat)
+                    Source(x=source.x + np.abs(
+                        Ds * np.sin(x * thetaE)) * theta_hat)
                     for x in [xp, xm]]
 
                 # Observe the fictitious images
@@ -677,7 +805,8 @@ class Observer(Point):
         # Multiple observations
         else:
 
-            angle_unit = u.mas
+            if self.units:
+                angle_unit = u.mas
 
             # Initial observation
             theta_phi0 = self.observe(source, lens, method)
@@ -689,8 +818,11 @@ class Observer(Point):
             for i in np.arange(N):
 
                 # Deviations from initial position
-                data.append((self.observe(
-                    source, lens, method) - theta_phi0).to(angle_unit))
+                dat = self.observe(source, lens, method) - theta_phi0
+                if self.units:
+                    data.append(dat.to(angle_unit))
+                else:
+                    data.append(dat)
 
                 self.time_evolve(dt)
                 source.time_evolve(dt)
@@ -704,5 +836,7 @@ class Observer(Point):
                 source.time_evolve(-dt * N)
                 if lens is not None:
                     lens.time_evolve(-dt * N)
-
-            return np.array(data) * angle_unit
+            if self.units:
+                return np.array(data) * angle_unit
+            else:
+                return np.array(data)
