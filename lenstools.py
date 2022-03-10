@@ -67,27 +67,38 @@ R_mw = 10
 def random_perp(vec):
     """ Pick a random direction normal to vec """
 
-    n = vec/norm(vec)
+    if vec.ndim == 1:
+        n = vec/norm(vec)
 
-    # arbitrarily pick a direction normal to n
-    n_perp1 = np.cross(n, [0, 0, 1])
+        # arbitrarily pick a direction normal to n
+        n_perp1 = np.cross(n, [0, 0, 1])
 
-    # deal wiuth the scenario where n is [0,0,1], incidentally
-    if norm(n_perp1) == 0:
-        n_perp1 = np.cross(n, [0, 1, 0])
+        # deal with the scenario where n is [0,0,1], incidentally
+        if norm(n_perp1) == 0:
+            n_perp1 = np.cross(n, [0, 1, 0])
 
-    # complete the orthonormal basis
-    n_perp2 = np.cross(n, n_perp1)
+        # complete the orthonormal basis
+        n_perp2 = np.cross(n, n_perp1)
 
-    # Random angle in the n_perp1, n_perp2 plane
-    phi = np.random.uniform(0, 2*pi)
+        # Random angle in the n_perp1, n_perp2 plane
+        phi = np.random.uniform(0, 2*pi)
 
-    return n_perp1 * np.cos(phi) + n_perp2 * np.sin(phi)
+        return n_perp1 * np.cos(phi) + n_perp2 * np.sin(phi)
+
+    else:
+        n = vec/multinorm(vec)[:, np.newaxis]
+        n_perp1 = np.cross(n, [0, 0, 1])
+        mask = (multinorm(n_perp1) == 0)
+        n_perp1[mask] = np.cross(n[mask], [0, 1, 0])
+        n_perp2 = np.cross(n, n_perp1)
+        phi = np.random.uniform(0, 2*pi, size=(vec.shape[0], 1))
+        return n_perp1 * np.cos(phi) + n_perp2 * np.sin(phi)
 
 
 def sample(method='normal', N=1, scale=1.0,
            inv_cdf=None,  # if method == 'custom_sphere'
            observer=None, kind=None, M=None, R=None,  # if method == 'relative'
+           N_spl=1,  # if method == 'multiblip'
            v_esc=v_esc
            ):
     """ Multi-purpose sampling function
@@ -124,6 +135,8 @@ def sample(method='normal', N=1, scale=1.0,
         if method == 'custom_sphere', sample radius using inverse cdf, inv_cdf
     observer : Observer object
         used if method == 'relative'
+    N_spl : int
+        if method == 'multiblip': number of sources per lens to be sampled
 
     Returns
     -------
@@ -214,13 +227,70 @@ def sample(method='normal', N=1, scale=1.0,
         x_s += random_perp(n) * np.random.uniform() * scale[2]
 
         return (
-            Lens(x=x_l, v=sample('normal') * v_esc, kind=kind, M=M, R=R),
-            Source(x=x_s, v=sample('normal') * v_esc)
+            Lens(x_l, sample('normal') * v_esc, kind, M, R),
+            Source(x_s, sample('normal') * v_esc)
+        )
+
+    elif method == 'standard':
+
+        if inv_cdf is None:
+            raise TypeError('Must provide inv_cdf')
+
+        if type(scale) not in [list, np.ndarray]:
+            scale = np.array([1., 1., 1.]) * scale
+
+        # Perform essentially the same sampling as 'relative' method
+        n = sample('sphere_surface', N)
+        x_l = observer.x + n * inv_cdf(np.random.uniform(size=(N, 1)))
+        x_s = x_l + n * np.random.uniform(size=(N, 1)) * scale[1]
+        x_s += random_perp(n) * np.random.uniform(size=(N, 1)) * scale[2]
+
+        return (
+            Lenses(x_l, sample('normal', N) * v_esc, kind, M, R),
+            Sources(x_s, sample('normal', N) * v_esc)
         )
 
     else:
 
         raise TypeError('choose method in', methods)
+
+
+def distance(source, lens, N=1, dt=1.):
+    """ Find the distance between source and lens
+
+        Parameters
+        ----------
+
+        source : Source or Sources
+        lens : Lens or Lenses
+        N : int
+            number of observations made of source and lens
+        dt : float
+            time increment between observations
+    """
+
+    if type(source) is Source:
+        nrm = norm
+    else:
+        nrm = multinorm
+
+    if N == 1:
+        return norm(source.x - lens.x)
+
+    else:
+        data = []
+        for i in np.arange(N):
+            data.append(nrm(source.x - lens.x))
+            source.time_evolve(dt)
+            lens.time_evolve(dt)
+
+        data = np.array(data)
+
+    # Bring the lens, and source back to their original positions
+    source.time_evolve(-dt * N)
+    lens.time_evolve(-dt * N)
+
+    return data
 
 
 #####################################
@@ -419,17 +489,17 @@ class Lens(Point):
 
 # Convenient function for initializing classes derived from Points
 # Converts single inputs into lists of inputs
-def to_list(y, tmp_list):
+def to_list(y, N):
 
     if type(y) is list:
         return np.array(y)
 
-    elif type(y) is np.ndarray or y is None:
+    elif (type(y) is np.ndarray) or (y is None):
         return y
 
     else:
-        if type(tmp_list) in {list, np.ndarray}:
-            return np.ones_like(tmp_list) * y
+        if N > 1:
+            return np.repeat(y, N)
 
         else:
             return np.array([y])
@@ -441,9 +511,14 @@ class Lenses(Points):
 
     def __init__(self, x=None, v=None, kind=None, M=None, R=None):
 
-        self.kind = to_list(kind, x)
-        self.M = to_list(M, x)
-        self.R = to_list(R, x)
+        if x is not None:
+            N = x.shape[0]
+        else:
+            N = None
+
+        self.kind = to_list(kind, N)
+        self.M = to_list(M, N)
+        self.R = to_list(R, N)
         super().__init__(x, v)
 
     def __setitem__(self, ind, lens):
@@ -603,13 +678,13 @@ class Observer(Point):
 
     def observe(self, source, lens=None, method='fully_approximate',
                 N=1, dt=None, reset=True, zeroed=True, cross_check=False):
-        """ observe a source, possibly deflected by a lens
+        """ observe \\theta and \phi of a source, possibly deflected by a lens
 
-            z/r = cos\theta
-            x/r = cos\phi sin\theta
-            y/r = sin\phi sin\theta
+            z/r = cos\\theta
+            x/r = cos\phi sin\\theta
+            y/r = sin\phi sin\\theta
 
-            \theta = arccos z/r
+            \\theta = arccos z/r
             \phi = arctan y/x
 
             Parameters
@@ -645,12 +720,7 @@ class Observer(Point):
                 if type(source) is Source:
                     x, y, z = source.x
                     r = norm(source.x)
-                    phi = np.arctan(y/x)
-                    if x < 0:
-                        if self.units:
-                            phi += pi * u.rad
-                        else:
-                            phi += pi
+                    phi = np.arctan2(y, x)
                     theta = np.arccos(z/r)
 
                     if self.units:
@@ -662,12 +732,7 @@ class Observer(Point):
 
                     x, y, z = source.x.transpose()
                     r = multinorm(source.x)
-                    phi = np.arctan(y/x)
-                    mask = (x < 0)
-                    if self.units:
-                        phi[mask] += pi * u.rad
-                    else:
-                        phi[mask] += pi
+                    phi = np.arctan2(y, x)
                     theta = np.arccos(z/r)
 
                     if self.units:
@@ -723,7 +788,6 @@ class Observer(Point):
                     - convenient impact parameter (|b| = |eta| = |xi|)
                 """
 
-
                 # Assume the impact parameter of the source is the
                 # distance that appears in the lensing equation
                 if type(source) is Source:
@@ -752,7 +816,8 @@ class Observer(Point):
                         x=source.x + Ds * np.sin(dTheta) * theta_hat)
                 elif type(source) is Sources:
                     image = Sources(
-                        x=source.x + (Ds * np.sin(dTheta))[:, np.newaxis] * theta_hat)
+                        x=source.x + (
+                            Ds * np.sin(dTheta))[:, np.newaxis] * theta_hat)
 
                 # Angles of the image
                 return self.observe(image)
