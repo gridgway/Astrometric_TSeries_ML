@@ -30,6 +30,10 @@ def norm(vec):
 def multinorm(vecs):
     return np.sqrt(np.sum(vecs**2, axis=1))
 
+
+def multidot(vecs1, vecs2):
+    return np.sum(vecs1 * vecs2, axis=1)
+
 #####################################
 # Conversion Factors                #
 #####################################
@@ -239,15 +243,31 @@ def sample(method='normal', N=1, scale=1.0,
         if type(scale) not in [list, np.ndarray]:
             scale = np.array([1., 1., 1.]) * scale
 
+        N_s = N * N_spl
+
         # Perform essentially the same sampling as 'relative' method
+
+        # Lens (make N_spl copies of the lenses)
         n = sample('sphere_surface', N)
-        x_l = observer.x + n * inv_cdf(np.random.uniform(size=(N, 1)))
-        x_s = x_l + n * np.random.uniform(size=(N, 1)) * scale[1]
-        x_s += random_perp(n) * np.random.uniform(size=(N, 1)) * scale[2]
+        if N_spl > 1:
+            n = np.repeat(n, N_spl, axis=0)
+
+        D_n = inv_cdf(np.random.uniform(size=(N, 1)))
+        if N_spl > 1:
+            D_n = np.repeat(D_n, N_spl, axis=0)
+        x_l = observer.x + n * D_n
+
+        v_l = sample('normal', N) * v_esc
+        if N_spl > 1:
+            v_l = np.repeat(v_l, N_spl, axis=0)
+
+        # Source
+        x_s = x_l + n * np.random.uniform(size=(N_s, 1)) * scale[1]
+        x_s += random_perp(n) * np.random.uniform(size=(N_s, 1)) * scale[2]
 
         return (
-            Lenses(x_l, sample('normal', N) * v_esc, kind, M, R),
-            Sources(x_s, sample('normal', N) * v_esc)
+            Lenses(x_l, v_l, kind, M, R),
+            Sources(x_s, sample('normal', N_s) * v_esc)
         )
 
     else:
@@ -255,7 +275,7 @@ def sample(method='normal', N=1, scale=1.0,
         raise TypeError('choose method in', methods)
 
 
-def distance(source, lens, N=1, dt=1.):
+def distance(source, lens, N=1, dt=1., impact=False, observer=None):
     """ Find the distance between source and lens
 
         Parameters
@@ -267,30 +287,75 @@ def distance(source, lens, N=1, dt=1.):
             number of observations made of source and lens
         dt : float
             time increment between observations
+        impact : bool
+            if True, report impact parameter
+        observer : Observer
+            if impact, report impact parameter wrt observer-lens line
     """
 
     if type(source) is Source:
         nrm = norm
+        dott = np.dot
     else:
         nrm = multinorm
+        dott = multidot
 
-    if N == 1:
-        return norm(source.x - lens.x)
+    if not impact:
+
+        if N == 1:
+            return norm(source.x - lens.x)
+
+        else:
+            data = []
+            for i in np.arange(N):
+                data.append(nrm(source.x - lens.x))
+                source.time_evolve(dt)
+                lens.time_evolve(dt)
+
+            data = np.array(data)
 
     else:
-        data = []
-        for i in np.arange(N):
-            data.append(nrm(source.x - lens.x))
-            source.time_evolve(dt)
-            lens.time_evolve(dt)
 
-        data = np.array(data)
+        n = lens.x - observer.x
+        if type(source) is Source:
+            n = n/nrm(n)
+        elif type(source) is Sources:
+            n = n/nrm(n)[:, np.newaxis]
+
+        if N == 1:
+
+            dx = source.x - observer.x
+
+            # parallel distance
+            D_par = dott(dx, n)
+            if type(source) is Sources:
+                D_par = D_par[:, np.newaxis]
+
+            return nrm(dx - n * D_par)
+
+        else:
+
+            data = []
+            for i in np.arange(N):
+                dx = source.x - observer.x
+                D_par = dott(dx, n)
+                if type(source) == Sources:
+                    D_par = D_par[:, np.newaxis]
+
+                data.append(nrm(dx - n * D_par))
+
+                source.time_evolve(dt)
+                lens.time_evolve(dt)
+
+            data = np.array(data)
 
     # Bring the lens, and source back to their original positions
     source.time_evolve(-dt * N)
     lens.time_evolve(-dt * N)
 
     return data
+
+
 
 
 #####################################
