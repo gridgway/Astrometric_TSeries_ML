@@ -103,7 +103,7 @@ def sample(method='normal', N=1, scale=1.0,
            inv_cdf=None,  # if method == 'custom_sphere'
            observer=None, kind=None, M=None, R=None,  # if method == 'relative'
            N_spl=1,  # if method == 'multiblip'
-           v_scale=v_esc
+           v_scale=v_esc/5
            ):
     """ Multi-purpose sampling function
 
