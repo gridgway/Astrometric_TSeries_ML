@@ -103,7 +103,7 @@ def sample(method='normal', N=1, scale=1.0,
            inv_cdf=None,  # if method == 'custom_sphere'
            observer=None, kind=None, M=None, R=None,  # if method == 'relative'
            N_spl=1,  # if method == 'multiblip'
-           v_esc=v_esc
+           v_scale=v_esc
            ):
     """ Multi-purpose sampling function
 
@@ -126,7 +126,7 @@ def sample(method='normal', N=1, scale=1.0,
         (iii) randomly offset source from observer-lens line, uniformly sample
                 impact parameter with scale[2]
         randomly sample lens and source velocities with gaussian,
-        sigma given by v_esc of Milky Way
+        sigma given by v_scale (default v_esc of Milky Way)
 
 
     Parameters
@@ -209,7 +209,7 @@ def sample(method='normal', N=1, scale=1.0,
                 with scale scale[0]
             Source sampled past the lens, along the lens-observer axis with
                 scale[1], and impact parameter with scale scale[2]
-            Both sets of velocities normally distributed with \sigma=v_esc
+            Both sets of velocities normally distributed with \sigma=v_scale
         """
 
         # Setting the distance scale for D_l, D_s, b
@@ -231,8 +231,8 @@ def sample(method='normal', N=1, scale=1.0,
         x_s += random_perp(n) * np.random.uniform() * scale[2]
 
         return (
-            Lens(x_l, sample('normal') * v_esc, kind, M, R),
-            Source(x_s, sample('normal') * v_esc)
+            Lens(x_l, sample('normal') * v_scale, kind, M, R),
+            Source(x_s, sample('normal') * v_scale)
         )
 
     elif method == 'standard':
@@ -257,7 +257,7 @@ def sample(method='normal', N=1, scale=1.0,
             D_n = np.repeat(D_n, N_spl, axis=0)
         x_l = observer.x + n * D_n
 
-        v_l = sample('normal', N) * v_esc
+        v_l = sample('normal', N) * v_scale
         if N_spl > 1:
             v_l = np.repeat(v_l, N_spl, axis=0)
 
@@ -267,7 +267,7 @@ def sample(method='normal', N=1, scale=1.0,
 
         return (
             Lenses(x_l, v_l, kind, M, R),
-            Sources(x_s, sample('normal', N_s) * v_esc)
+            Sources(x_s, sample('normal', N_s) * v_scale)
         )
 
     else:
