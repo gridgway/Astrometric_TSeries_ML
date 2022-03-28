@@ -12,11 +12,10 @@ class SetTransformerLSTM(nn.Module):
         super(SetTransformerLSTM, self).__init__()
 
         # Bi-dirctional LSTM encoder
-        self.phi = nn.LSTM(input_size=2, hidden_size=dim_hidden, num_layers=8, batch_first=True, bidirectional=True)
-        self.phi_mlp = build_mlp(input_dim=2 * dim_hidden, hidden_dim=512, output_dim=dim_input, layers=0)
+        self.phi = nn.LSTM(input_size=2, hidden_size=int(dim_hidden / 2), num_layers=4, batch_first=True, bidirectional=True)
 
         self.enc = nn.Sequential(
-                SAB(dim_input, dim_hidden, num_heads, ln=ln),
+                SAB(dim_hidden, dim_hidden, num_heads, ln=ln),
                 SAB(dim_hidden, dim_hidden, num_heads, ln=ln))
 
         self.dec = nn.Sequential(
@@ -41,8 +40,6 @@ class SetTransformerLSTM(nn.Module):
         
         # Uncombine batch and star dimensions
         x = rearrange(h, '(b s) h -> b s h', b=batch_size)
-
-        x = self.phi_mlp(x)
 
         return self.dec(self.enc(x))[:, 0, :]
 
@@ -73,11 +70,11 @@ class DeepSetLSTM(nn.Module):
         h = rearrange(h, '(d l) b h -> b d l h', d=2)[:, :, -1, :]
         h = rearrange(h, 'b d h -> b (d h)')
         
+        h = self.phi_mlp(h)
+
         # Uncombine batch and star dimensions, then do mean-aggregation along star axis
         # (Enforce permutation invariance)
         h = rearrange(h, '(b s) h -> b s h', b=batch_size).mean(-2)
-        
-        h = self.phi_mlp(h)
         
         # Pass through post-aggregation network
         x = self.rho(h)
