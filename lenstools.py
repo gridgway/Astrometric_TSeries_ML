@@ -41,6 +41,9 @@ def multidot(vecs1, vecs2):
 AU = u.AU.to(u.kpc)
 """Astronomical Unit in kpc"""
 
+arcsec = 2*pi/360/60**2
+"""Numerical value of arc-seconds in radians"""
+
 mu_as = 2*pi/360/60**2 / 1e6
 """Numerical value of micro arc-seconds in radians"""
 
@@ -265,6 +268,22 @@ def sample(method='normal', N=1, scale=1.0,
         x_s = x_l + n * np.random.uniform(size=(N_s, 1)) * scale[1]
         x_s += random_perp(n) * np.random.uniform(size=(N_s, 1)) * scale[2]
 
+        if type(M) in {list, np.ndarray}:
+
+            if len(M) != N:
+                raise TypeError('dimensions for M and lenses should match')
+
+            if N_spl > 1:
+                M = np.repeat(M, N_spl, axis=0)
+
+        if type(R) in {list, np.ndarray}:
+
+            if len(R) != N:
+                raise TypeError('dimensions for R and lenses should match')
+
+            if N_spl > 1:
+                R = np.repeat(R, N_spl, axis=0)
+
         return (
             Lenses(x_l, v_l, kind, M, R),
             Sources(x_s, sample('normal', N_s) * v_scale)
@@ -293,7 +312,7 @@ def distance(source, lens, N=1, dt=1., impact=False, observer=None):
             if impact, report impact parameter wrt observer-lens line
     """
 
-    if type(source) is Source:
+    if issubclass(type(source), Point):
         nrm = norm
         dott = np.dot
     else:
@@ -317,9 +336,9 @@ def distance(source, lens, N=1, dt=1., impact=False, observer=None):
     else:
 
         n = lens.x - observer.x
-        if type(source) is Source:
+        if issubclass(type(source), Point):
             n = n/nrm(n)
-        elif type(source) is Sources:
+        elif issubclass(type(source), Points):
             n = n/nrm(n)[:, np.newaxis]
 
         if N == 1:
@@ -328,7 +347,7 @@ def distance(source, lens, N=1, dt=1., impact=False, observer=None):
 
             # parallel distance
             D_par = dott(dx, n)
-            if type(source) is Sources:
+            if issubclass(type(source), Points):
                 D_par = D_par[:, np.newaxis]
 
             return nrm(dx - n * D_par)
@@ -447,9 +466,8 @@ class Points(object):
     def __getitem__(self, ind):
         return Point(self.x[ind], self.v[ind])
 
-
-    # !!! Less copy and paste in this function
     def append(self, point):
+        # !!! Less copy and paste in this function
         if self.x is None:
             self.x = point.x[np.newaxis]
         else:
@@ -459,6 +477,35 @@ class Points(object):
             self.v = point.v[np.newaxis]
         else:
             self.v = np.append(self.v, point.v[np.newaxis], axis=0)
+
+    def mod_angles(self,
+                   theta_lim=[pi/2/arcsec-0.9, pi/2/arcsec+0.9],
+                   phi_lim=[-1.6, 1.6]):
+        """ Mod theta and phi to lie within the intervals provided.
+            theta_lim and phi_lim in arcsec.
+        """
+
+        # Get theta and phi
+        x, y, z = np.transpose(self.x)
+        r = multinorm(self.x)
+        theta = np.arccos(z/r) / arcsec
+        phi = np.arctan2(y, x) / arcsec
+
+        # Mod the angles
+        theta0, phi0 = theta_lim[0], phi_lim[0]
+        dtheta, dphi = theta_lim[1]-theta0, phi_lim[1]-phi0
+        theta = ((theta - theta0) % dtheta) + theta0
+        phi = ((phi - phi0) % dphi) + phi0
+
+        # Back to radians
+        theta, phi = theta*arcsec, phi*arcsec
+
+        # get x,y,z
+        x = np.sin(theta) * np.cos(phi) * r
+        y = np.sin(theta) * np.sin(phi) * r
+        z = np.cos(theta) * r
+
+        self.x = np.transpose([x, y, z])
 
     def time_evolve(self, dt):
         """ evolve the position of the lenses
@@ -782,7 +829,7 @@ class Observer(Point):
             ###
             if lens is None:
 
-                if type(source) is Source:
+                if issubclass(type(source), Point):
                     x, y, z = source.x
                     r = norm(source.x)
                     phi = np.arctan2(y, x)
@@ -793,7 +840,7 @@ class Observer(Point):
                     else:
                         return np.array([theta, phi])
 
-                elif type(source) is Sources:
+                elif issubclass(type(source), Points):
 
                     x, y, z = source.x.transpose()
                     r = multinorm(source.x)
@@ -812,7 +859,7 @@ class Observer(Point):
             # Otherwise, include the deflection due to the lens
             ###
 
-            if type(source) is Source:
+            if issubclass(type(source), Point):
                 # Distance from observer to lens
                 Dl = norm(lens.x-self.x)
 
@@ -834,7 +881,7 @@ class Observer(Point):
                 if cross_check:
                     print(1-(norm(eta)**2 + Ds**2)/norm(source.x)**2)
 
-            elif type(source) is Sources:
+            elif issubclass(type(source), Points):
 
                 Dl = multinorm(lens.x-self.x)
                 zhat = (lens.x-self.x)/Dl[:, np.newaxis]
@@ -855,9 +902,9 @@ class Observer(Point):
 
                 # Assume the impact parameter of the source is the
                 # distance that appears in the lensing equation
-                if type(source) is Source:
+                if issubclass(type(source), Point):
                     b = norm(eta)
-                elif type(source) is Sources:
+                elif issubclass(type(source), Points):
                     b = multinorm(eta)
 
                 # Enclosed mass
@@ -876,10 +923,10 @@ class Observer(Point):
                 # dx = - Dl/Ds / y  / mu_as * 1e-3 * u.mas
 
                 # Place a fictitious source where the source appears
-                if type(source) is Source:
+                if issubclass(type(source), Point):
                     image = Source(
                         x=source.x + Ds * np.sin(dTheta) * theta_hat)
-                elif type(source) is Sources:
+                elif issubclass(type(source), Points):
                     image = Sources(
                         x=source.x + (
                             Ds * np.sin(dTheta))[:, np.newaxis] * theta_hat)
@@ -969,7 +1016,7 @@ class Observer(Point):
                 if lens is not None:
                     lens.time_evolve(-dt * N)
 
-            if type(source) is Source:
+            if issubclass(type(source), Point):
                 return np.array(data) * angle_unit
             else:
                 return np.swapaxes(data, 0, 1) * angle_unit
