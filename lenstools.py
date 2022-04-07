@@ -31,6 +31,16 @@ def multinorm(vecs):
     return np.sqrt(np.sum(vecs**2, axis=1))
 
 
+def nrm(vec):
+    if type(vec) is list:
+        vec = np.array(vec)
+
+    if vec.ndim == 1:
+        return norm(vec)
+    else:
+        return multinorm(vec)
+
+
 def multidot(vecs1, vecs2):
     return np.sum(vecs1 * vecs2, axis=1)
 
@@ -388,6 +398,7 @@ def distance(source, lens, N=1, dt=1., impact=False, observer=None):
 # Base Classes                      #
 #####################################
 
+
 class Point(object):
     """ Point class
 
@@ -407,6 +418,11 @@ class Point(object):
             v : 1D ndarray
                 3D velocity of object
         """
+
+        if type(x) is list:
+            x = np.array(x)
+        if type(v) is list:
+            v = np.array(v)
 
         self.x = x
         self.v = v
@@ -621,7 +637,7 @@ class Lenses(Points):
     """ Collection of lenses
     """
 
-    def __init__(self, x=None, v=None, kind=None, M=None, R=None):
+    def __init__(self, x=None, v=None, kind='point', M=None, R=None):
 
         if x is not None:
             N = x.shape[0]
@@ -912,24 +928,22 @@ class Observer(Point):
 
                 if self.units:
                     units = (u.kpc**3 / u.M_sun / u.yr**2) / (u.kpc/u.yr)**2
-                    dTheta = np.abs(
+                    dTheta = (
                         -(1-Dl/Ds) * 4*G_N*M_enc/c**2/b * units
                     ).decompose() / mu_as * 1e-3 * u.mas
                 else:
-                    dTheta = np.abs(
-                        -(1-Dl/Ds) * 4*G_N*M_enc/c**2/b
-                    )
+                    dTheta = (1-Dl/Ds) * 4*G_N*M_enc/c**2/b
                 # dTheta = -thetaE**2 * Dl/Ds / beta  / mu_as*1e-3*u.mas
                 # dx = - Dl/Ds / y  / mu_as * 1e-3 * u.mas
 
                 # Place a fictitious source where the source appears
                 if issubclass(type(source), Point):
                     image = Source(
-                        x=source.x + Ds * np.sin(dTheta) * theta_hat)
+                        x=source.x + Dls * np.tan(dTheta) * theta_hat)
                 elif issubclass(type(source), Points):
                     image = Sources(
                         x=source.x + (
-                            Ds * np.sin(dTheta))[:, np.newaxis] * theta_hat)
+                            Dls * np.tan(dTheta))[:, np.newaxis] * theta_hat)
 
                 # Angles of the image
                 return self.observe(image)
