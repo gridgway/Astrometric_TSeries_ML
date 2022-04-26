@@ -15,7 +15,7 @@ def build_maf(dim=1, num_transforms=8, context_features=None, hidden_features=12
                         hidden_features=hidden_features,
                         context_features=context_features,
                         num_blocks=2,
-                        use_residual_blocks=False,
+                        use_residual_blocks=True,
                         random_mask=False,
                         activation=tanh,
                         dropout_probability=0.0,
