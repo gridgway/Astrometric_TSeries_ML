@@ -7,20 +7,15 @@ We choose kpc, yr and M_sol as our system of units.
 
 import numpy as np
 
-# For numerical integration
-from scipy.integrate import quad
-
 # Units
 from astropy import units as u
 
 # Constants
 from astropy import constants as const
-
-# Convenient variables
 pi = np.pi
-# norm = np.linalg.norm
-mult = np.matmul
-dot = np.dot
+
+# vectorized operations
+# Able to handle vectors and lists of vectors
 
 
 def norm(vec):
@@ -43,6 +38,36 @@ def nrm(vec):
 
 def multidot(vecs1, vecs2):
     return np.sum(vecs1 * vecs2, axis=1)
+
+
+def dot(vec1, vec2):
+    if type(vec1) is list:
+        vec1 = np.array(vec1)
+    if type(vec2) is list:
+        vec2 = np.array(vec2)
+
+    if (vec1.ndim > 1) and (vec2.ndim > 1):
+        return multidot(vec1, vec2)
+    else:
+        return np.dot(vec1, vec2)
+
+
+def mult(v1, v2):
+    if (type(v1) in [float, int]) or (type(v2) in [float, int]):
+        return v1*v2
+    else:
+        if type(v1) is list:
+            v1 = np.array(v1)
+        if type(v2) is list:
+            v2 = np.array(v2)
+
+        if v1.ndim == v2.ndim:
+            return v1*v2
+        if v2.ndim == 1:
+            return v1 * v2[:, np.newaxis]
+        if v1.ndim == 1:
+            return v1[:, np.newaxis] * v2
+
 
 #####################################
 # Conversion Factors                #
@@ -116,7 +141,8 @@ def sample(method='normal', N=1, scale=1.0,
            inv_cdf=None,  # if method == 'custom_sphere'
            observer=None, kind=None, M=None, R=None,  # if method == 'relative'
            N_spl=1,  # if method == 'multiblip'
-           v_scale=v_esc/5
+           v_scale=v_esc/5,
+           match_Sid=False
            ):
     """ Multi-purpose sampling function
 
@@ -265,10 +291,14 @@ def sample(method='normal', N=1, scale=1.0,
         if N_spl > 1:
             n = np.repeat(n, N_spl, axis=0)
 
-        D_n = inv_cdf(np.random.uniform(size=(N, 1)))
+        if match_Sid:
+            D_ol = np.ones((N, 1)) * scale[0]  # Delta function dist.
+        else:
+            D_ol = inv_cdf(np.random.uniform(size=(N, 1)))
+
         if N_spl > 1:
-            D_n = np.repeat(D_n, N_spl, axis=0)
-        x_l = observer.x + n * D_n
+            D_ol = np.repeat(D_ol, N_spl, axis=0)
+        x_l = observer.x + n * D_ol
 
         v_l = sample('normal', N) * v_scale
         if N_spl > 1:
@@ -495,8 +525,8 @@ class Points(object):
             self.v = np.append(self.v, point.v[np.newaxis], axis=0)
 
     def mod_angles(self,
-                   theta_lim=[pi/2/arcsec-0.9, pi/2/arcsec+0.9],
-                   phi_lim=[-1.6, 1.6]):
+                   theta_lim=[pi/2/arcsec-0.1, pi/2/arcsec+0.1],
+                   phi_lim=[-0.1, 0.1]):
         """ Mod theta and phi to lie within the intervals provided.
             theta_lim and phi_lim in arcsec.
         """
@@ -709,7 +739,7 @@ class Source(Point):
         super().__init__(x, v)
 
     def copy(self):
-        return Source(x=self.x, v=self.v, F=self.F)
+        return Source(x=self.x.copy(), v=self.v.copy(), F=self.F)
 
 
 class Sources(Points):
@@ -793,9 +823,8 @@ class Observer(Point):
                 time increment
         """
 
-        self._x_ctr += self.v*dt
-
         if self.parallax:
+            self._x_ctr += self.v*dt
             dphi = 2*np.pi * dt
             if self.units:
                 dphi *= u.rad/u.yr
@@ -803,6 +832,9 @@ class Observer(Point):
 
             self.x = self._x_ctr + self.R * np.array([
                 np.cos(self.phi), np.sin(self.phi), 0])
+
+        else:
+            self.x += self.v*dt
 
     def observe(self, source, lens=None, method='fully_approximate',
                 N=1, dt=None, reset=True, zeroed=True, cross_check=False):
@@ -835,14 +867,13 @@ class Observer(Point):
         if N > 1 and dt is None:
             raise TypeError('Please provide a time increment')
 
+        # single observation
         if N == 1:
 
-            # Ultimately, observed angular position on the sky
+            # sky coordinates
             theta, phi = 0, 0
 
-            ###
-            # Observe the angular position of a source without deflection
-            ###
+            # observe the angular position of a source without deflection
             if lens is None:
 
                 if issubclass(type(source), Point):
@@ -871,127 +902,10 @@ class Observer(Point):
                 else:
                     raise TypeError('Invalid source input')
 
-            ###
             # Otherwise, include the deflection due to the lens
-            ###
+            image = self.deflected_image(source, lens, method, cross_check)
 
-            if issubclass(type(source), Point):
-                # Distance from observer to lens
-                Dl = norm(lens.x-self.x)
-
-                # direction of line passing through the lens and observer
-                zhat = (lens.x-self.x)/Dl
-
-                # Distance from observer to source along z axis
-                Ds = dot(zhat, source.x)
-
-                # Perpendicular position, angle, and direction
-                # of source relative to z axis
-                eta = source.x - Ds * zhat
-                beta = np.arctan(norm(eta)/Ds)
-                theta_hat = eta/norm(eta)
-
-                # Distance between source and lens along z axis
-                Dls = Ds - Dl
-
-                if cross_check:
-                    print(1-(norm(eta)**2 + Ds**2)/norm(source.x)**2)
-
-            elif issubclass(type(source), Points):
-
-                Dl = multinorm(lens.x-self.x)
-                zhat = (lens.x-self.x)/Dl[:, np.newaxis]
-                Ds = np.sum(zhat * source.x, axis=1)
-                eta = source.x - Ds[:, np.newaxis] * zhat
-                beta = np.arctan(multinorm(eta)/Ds)
-                theta_hat = eta/multinorm(eta)[:, np.newaxis]
-                Dls = Ds - Dl
-                if cross_check:
-                    print(1-(multinorm(eta)**2 + Ds**2)/multinorm(source.x)**2)
-
-            if method == 'fully_approximate':
-                """ Formula from 1804.01991 (Ken+)
-                    - all angles assumed small
-                    - leading order in 4GM/bc^2
-                    - convenient impact parameter (|b| = |eta| = |xi|)
-                """
-
-                # Assume the impact parameter of the source is the
-                # distance that appears in the lensing equation
-                if issubclass(type(source), Point):
-                    b = norm(eta)
-                elif issubclass(type(source), Points):
-                    b = multinorm(eta)
-
-                # Enclosed mass
-                M_enc = lens.enclosed_mass(b)
-
-                if self.units:
-                    units = (u.kpc**3 / u.M_sun / u.yr**2) / (u.kpc/u.yr)**2
-                    dTheta = (
-                        -(1-Dl/Ds) * 4*G_N*M_enc/c**2/b * units
-                    ).decompose() / mu_as * 1e-3 * u.mas
-                else:
-                    dTheta = (1-Dl/Ds) * 4*G_N*M_enc/c**2/b
-                # dTheta = -thetaE**2 * Dl/Ds / beta  / mu_as*1e-3*u.mas
-                # dx = - Dl/Ds / y  / mu_as * 1e-3 * u.mas
-
-                # Place a fictitious source where the source appears
-                if issubclass(type(source), Point):
-                    image = Source(
-                        x=source.x + Dls * np.tan(dTheta) * theta_hat)
-                elif issubclass(type(source), Points):
-                    image = Sources(
-                        x=source.x + (
-                            Dls * np.tan(dTheta))[:, np.newaxis] * theta_hat)
-
-                # Angles of the image
-                return self.observe(image)
-
-            if method == 'quadratic':
-                """ Meneghetti
-                    - all angles assumed small
-                    - leading order in 4GM/bc^2
-                    - less convenient impact parameter (|eta| != |xi|)
-                    - but xi is assumed to be approximately the
-                      distance of closest approach
-                """
-
-                # Einstein radius
-                if self.units:
-                    thetaE = (
-                        np.sqrt(4 * G_N * lens.M/c**2 * Dls/Ds/Dl)
-                    ).decompose() * u.rad
-                else:
-                    thetaE = np.sqrt(4 * G_N * lens.M/c**2 * Dls/Ds/Dl)
-
-                # Everything in units of Einstein radius
-                if self.units:
-                    yhalf = (beta/thetaE/2).value
-                else:
-                    yhalf = beta/thetaE/2
-
-                # The two images: x-plus and x-minus
-                # x = theta/thetaE
-                xp, xm = yhalf + np.sqrt(
-                    1 + yhalf**2) * np.array([1, -1])
-
-                # Place fictitious sources at the image positions
-                image_p, image_m = [
-                    Source(x=source.x + np.abs(
-                        Ds * np.sin(x * thetaE)) * theta_hat)
-                    for x in [xp, xm]]
-
-                # Observe the fictitious images
-                return [
-                    self.observe(image_p),
-                    self.observe(image_m)
-                ][1]
-
-        elif method == 'Virbhadra_Ellis':
-            """Formula from https://arxiv.org/pdf/astro-ph/9904193v2.pdf"""
-
-            pass
+            return self.observe(image)
 
         # Multiple observations
         else:
@@ -1006,7 +920,7 @@ class Observer(Point):
             if not zeroed:
                 theta_phi0 *= 0
 
-            # Make N-1 more observations. Observe
+            # Make N-1 more observations.
             data = []
             for i in np.arange(N):
 
@@ -1034,3 +948,105 @@ class Observer(Point):
                 return np.array(data) * angle_unit
             else:
                 return np.swapaxes(data, 0, 1) * angle_unit
+
+    def deflected_image(self, source, lens, method, cross_check=False):
+        """ Calculate the deflection angle of source light ray
+            due to presence of lens.
+        """
+
+        # Distance from observer to lens
+        Dl = nrm(lens.x-self.x)
+
+        # direction of line passing through the lens and observer
+        zhat = mult(lens.x-self.x, 1/Dl)
+
+        # Distance from observer to source along z axis
+        Ds = dot(zhat, source.x)
+
+        # Perpendicular position, angle, and direction
+        # of source relative to z axis
+        eta = source.x - mult(Ds, zhat)
+        beta = np.arctan(nrm(eta)/Ds)
+        theta_hat = mult(eta, 1/nrm(eta))
+
+        # Distance between source and lens along z axis
+        Dls = Ds - Dl
+
+        if cross_check:
+            print(1-(nrm(eta)**2 + Ds**2)/nrm(source.x)**2)
+
+        if method == 'fully_approximate':
+            """ Formula from 1804.01991 (Ken+)
+                - all angles assumed small
+                - leading order in 4GM/bc^2
+                - convenient impact parameter (|b| = |eta| = |xi|)
+            """
+
+            # Assume the impact parameter of the source is the
+            # distance that appears in the lensing equation
+            b = nrm(eta)
+
+            # Enclosed mass
+            M_enc = lens.enclosed_mass(b)
+
+            if self.units:
+                units = (u.kpc**3 / u.M_sun / u.yr**2) / (u.kpc/u.yr)**2
+                dTheta = (
+                    -(1-Dl/Ds) * 4*G_N*M_enc/c**2/b * units
+                ).decompose() / mu_as * 1e-3 * u.mas
+            else:
+                dTheta = (1-Dl/Ds) * 4*G_N*M_enc/c**2/b
+
+        if method == 'match_Sid':
+            """ Similar to fully_approximate, but drop the factor of 1-Dl/Ds
+            """
+
+            b = nrm(eta)
+            M_enc = lens.enclosed_mass(b)
+            dTheta = 4*G_N*M_enc/c**2/b
+
+        if method == 'quadratic':
+            """ Meneghetti
+                - all angles assumed small
+                - leading order in 4GM/bc^2
+                - less convenient impact parameter (|eta| != |xi|)
+                - but xi is assumed to be approximately the
+                  distance of closest approach
+            """
+
+            # Einstein radius
+            if self.units:
+                thetaE = (
+                    np.sqrt(4 * G_N * lens.M/c**2 * Dls/Ds/Dl)
+                ).decompose() * u.rad
+            else:
+                thetaE = np.sqrt(4 * G_N * lens.M/c**2 * Dls/Ds/Dl)
+
+            # Everything in units of Einstein radius
+            if self.units:
+                yhalf = (beta/thetaE/2).value
+            else:
+                yhalf = beta/thetaE/2
+
+            # The two images: x-plus and x-minus
+            # x = theta/thetaE
+            xp, xm = yhalf + np.sqrt(
+                1 + yhalf**2) * np.array([1, -1])
+
+            dTheta = xm*thetaE
+
+        elif method == 'Virbhadra_Ellis':
+            """Formula from https://arxiv.org/pdf/astro-ph/9904193v2.pdf"""
+
+            pass
+
+        # Place a fictitious source where the source appears
+        if issubclass(type(source), Point):
+            image = Source(
+                x=source.x + Dls * np.tan(dTheta) * theta_hat)
+        elif issubclass(type(source), Points):
+            image = Sources(
+                x=source.x + (
+                    Dls * np.tan(dTheta))[:, np.newaxis] * theta_hat)
+
+        return image
