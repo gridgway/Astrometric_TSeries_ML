@@ -141,8 +141,7 @@ def sample(method='normal', N=1, scale=1.0,
            inv_cdf=None,  # if method == 'custom_sphere'
            observer=None, kind=None, M=None, R=None,  # if method == 'relative'
            N_spl=1,  # if method == 'multiblip'
-           v_scale=v_esc/5,
-           match_Sid=False
+           v_scale=v_esc/5
            ):
     """ Multi-purpose sampling function
 
@@ -291,10 +290,7 @@ def sample(method='normal', N=1, scale=1.0,
         if N_spl > 1:
             n = np.repeat(n, N_spl, axis=0)
 
-        if match_Sid:
-            D_ol = np.ones((N, 1)) * scale[0]  # Delta function dist.
-        else:
-            D_ol = inv_cdf(np.random.uniform(size=(N, 1)))
+        D_ol = inv_cdf(np.random.uniform(size=(N, 1)))
 
         if N_spl > 1:
             D_ol = np.repeat(D_ol, N_spl, axis=0)
@@ -825,7 +821,8 @@ class Observer(Point):
 
         if self.parallax:
             self._x_ctr += self.v*dt
-            dphi = 2*np.pi * dt
+            omega = 2*np.pi  # rad per year
+            dphi = omega * dt
             if self.units:
                 dphi *= u.rad/u.yr
             self.phi += dphi
