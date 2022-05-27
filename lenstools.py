@@ -683,8 +683,13 @@ class Lenses(Points):
         self.R[ind] = lens.R
 
     def __getitem__(self, ind):
+        if self.R is not None:
+            R = self.R[ind]
+        else:
+            R = None
+
         return Lens(self.x[ind], self.v[ind],
-                    self.kind[ind], self.M[ind], self.R[ind])
+                    self.kind[ind], self.M[ind], R)
 
     # !!! Less copy and paste in this function
     def append(self, lens):
@@ -834,7 +839,7 @@ class Observer(Point):
             self.x += self.v*dt
 
     def observe(self, source, lens=None, method='fully_approximate',
-                N=1, dt=None, reset=True, zeroed=True, cross_check=False):
+                N=1, dt=None, reset=True, zeroed=False, cross_check=False):
         """ observe \\theta and \phi of a source, possibly deflected by a lens
 
             z/r = cos\\theta
@@ -874,6 +879,7 @@ class Observer(Point):
             if lens is None:
 
                 if issubclass(type(source), Point):
+
                     x, y, z = source.x
                     r = norm(source.x)
                     phi = np.arctan2(y, x)
